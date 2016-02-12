@@ -1,0 +1,186 @@
+#!/usr/bin/env perl
+
+############################################################################
+# FILE:                git-combine-merges                                  #
+# DESCRIPTION:         Combines a linear series of merges into one merge   #
+# AUTHOR:              Jonathan G. Rennison <j.g.rennison@gmail.com>       #
+# LICENSE:             New BSD License, see LICENSE.txt                    #
+#                                                                          #
+# Copyright © Jonathan G. Rennison 2016                                    #
+############################################################################
+
+use strict;
+use warnings;
+
+use Proc::Hevy;
+
+sub usage {
+	print STDERR <<'EOF'
+usage: git combine-merges <commit>
+
+This replaces a linear sequence of merges from <commit> to HEAD,
+with a single merge of <commit> and HEAD's second parent.
+<commit> must be an ancestor of HEAD's first parent.
+HEAD must be a merge with two parents.
+The merges replaced are those given by `git log --ancestry-path <commit>..HEAD`
+The new merge has the same tree as HEAD.
+The new merge's commit message is HEAD's, plus any conflict
+messages from the replaced merges.
+This does not touch the index or working tree.
+A warning is output if a replaced merge has a parent not reachable
+from the new merge.
+
+Starting from:            `git combine-merges B` produces:
+  D---E---F                 D---E---F
+ /     \   \     --->      /         \
+A---B---C---@             A---B-------@'
+
+Starting from:            `git combine-merges B` produces:
+    F----
+   /     \                  D---F
+  D---E   \      --->      /     \
+ /     \   \              A---B---@'
+A---B---C---@             and a warning about E
+
+EOF
+}
+
+my $input_ref = $ARGV[0] // usage();
+
+my $rev;
+my $status_rev_parse = Proc::Hevy->exec(
+	command => [qw(git rev-parse --verify), "$input_ref^{commit}"],
+	stdout  => \$rev,
+	stderr  => \*STDERR,
+);
+exit($status_rev_parse << 8) if $status_rev_parse;
+chomp $rev;
+
+my $status_rev_ancestor = Proc::Hevy->exec(
+	command => [qw(git merge-base --is-ancestor), $rev, '@^'],
+	stderr  => \*STDERR,
+);
+if ($status_rev_ancestor) {
+	fatal_rev("'$input_ref' is not an ancestor of HEAD's first parent", $rev);
+}
+
+my $log_str;
+my $status_rev_log = Proc::Hevy->exec(
+	command => [qw(git log --ancestry-path --pretty=tformat:%H%x00%P%x00%B%x00%x00%x00 -z), "$rev..@"],
+	stdout  => \$log_str,
+	stderr  => \*STDERR,
+);
+exit($status_rev_log << 8) if $status_rev_log;
+
+my @revs;
+my %seen_parents;
+for my $rev_str (split(/\000{4}/, $log_str)) {
+	my ($hash, $parents, $msg) = split(/\000/, $rev_str, -1);
+	my @parent_revs = split(/\s+/, $parents);
+	push @revs, {
+		hash => $hash,
+		msg => $msg,
+		parents => \@parent_revs,
+	};
+	$seen_parents{$_} = 1 for @parent_revs;
+}
+
+my %revs_hash = map { $_->{hash} => 1 } @revs;
+
+if (scalar @revs == 0) {
+	fatal("No commits found");
+}
+
+my ($head_rev, @non_head_revs) = @revs;
+
+if (scalar @{ $head_rev->{parents} } != 2) {
+	fatal("HEAD is not a merge with exactly 2 parents");
+}
+for (@non_head_revs) {
+	if (scalar @{ $_->{parents} } < 2) {
+		fatal_rev("Commit to be combined is not a merge", $_->{hash});
+	}
+}
+
+for (keys %seen_parents) {
+	next if exists $revs_hash{$_};
+	next if $_ eq $rev;
+
+	my $status = Proc::Hevy->exec(
+		command => [qw(git merge-base --is-ancestor), $_, $head_rev->{parents}->[1]],
+		stderr  => \*STDERR,
+	);
+	if ($status) {
+		print STDERR "Warning: commit referenced by the current HEAD will not be referenced by the new HEAD\n\t";
+		log_rev_line($_);
+	}
+}
+
+my %conflict_lines;
+for (@revs) {
+	# process commit messages
+	my @lines = split("\n", $_->{msg}, -1);
+	my @saved_lines;
+	while (defined(my $line = shift @lines)) {
+		chomp $line;
+		if ($line eq "# Conflicts:") {
+			pop @saved_lines while $saved_lines[-1] eq "";
+			while (defined(my $conflict_line = shift @lines)) {
+				last unless $conflict_line =~ /^#\t/;
+				$conflict_lines{$conflict_line} = 1;
+			}
+			last;
+		} else {
+			push @saved_lines, $line;
+		}
+	}
+	push @saved_lines, @lines;
+	pop @saved_lines while $saved_lines[-1] eq "";
+	$_->{saved_msg_lines} = \@saved_lines;
+}
+
+# generate new message, with deduped conflict lines from all combined merges
+my @new_msg = @{ $head_rev->{saved_msg_lines} };
+if (scalar %conflict_lines) {
+	push @new_msg, "", "# Conflicts:", sort(keys %conflict_lines), "";
+}
+my $new_msg_str = join("\n", @new_msg);
+
+my $new_rev;
+my $status_commit = Proc::Hevy->exec(
+	command => [qw(git commit-tree -p), $rev, qw(-p @^2 -m), $new_msg_str, '@^{tree}'],
+	stdout  => \$new_rev,
+	stderr  => \*STDERR,
+);
+exit($status_commit << 8) if $status_commit;
+chomp $new_rev;
+
+my $status_reset = Proc::Hevy->exec(
+	command => [qw(git reset --soft), $new_rev],
+	stderr  => \*STDERR,
+);
+exit($status_reset << 8) if $status_reset;
+
+exit 0;
+
+sub log_rev_line {
+	my ($rev) = @_;
+	Proc::Hevy->exec(
+		command => [qw(git log --oneline), "$rev^!"],
+		stdout  => \*STDERR,
+		stderr  => \*STDERR,
+	);
+}
+
+sub fatal {
+	my ($msg) = @_;
+	print STDERR "$msg\n";
+	exit 1;
+}
+
+sub fatal_rev {
+	my ($msg, $rev) = @_;
+	print STDERR "$msg\n\t";
+	log_rev_line($rev);
+	exit 1;
+}
