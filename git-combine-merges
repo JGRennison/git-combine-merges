@@ -27,6 +27,7 @@ usage: git combine-merges [options] <commit>
 
     -e, --edit            edit commit message
     -f, --force           perform fewer checks, see -s/--second-parent
+    -n, --dry-run         print the new commit hash instead of resetting HEAD
     -v, --verbose         be verbose
     -h, -?, --help        show this help
 
@@ -62,7 +63,7 @@ EOF
 	exit $retcode;
 }
 
-my ($edit, $force, $help);
+my ($edit, $force, $help, $dry_run);
 my $verbose = 0;
 my $second_parent;
 
@@ -70,6 +71,7 @@ Getopt::Long::Configure("no_auto_abbrev", "bundling");
 GetOptions (
 	"edit|e"       => \$edit,
 	"force|f"      => \$force,
+	"dry-run|n"    => \$dry_run,
 	"help|h|?"     => \$help,
 	"verbose|v+"   => \$verbose,
 	"second-parent|s=s"  => \$second_parent,
@@ -223,6 +225,11 @@ my $status_commit = exec_wrapper(
 );
 exit($status_commit << 8) if $status_commit;
 chomp $new_rev;
+
+if ($dry_run) {
+	print "\nNot resetting HEAD.\n\nNew commit: '$new_rev'\n";
+	exit 0;
+}
 
 my $status_reset = exec_wrapper(
 	command => [qw(git reset --soft), $new_rev],
