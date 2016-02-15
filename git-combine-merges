@@ -13,10 +13,21 @@ use strict;
 use warnings;
 
 use Proc::Hevy;
+use Getopt::Long;
+use File::Temp qw(tempfile);
+use File::Slurp;
+
 
 sub usage {
-	print STDERR <<'EOF'
-usage: git combine-merges <commit>
+	my ($fh, $retcode) = @_;
+	$fh //= \*STDERR;
+	$retcode //= 1;
+	print $fh <<'EOF';
+usage: git combine-merges [options] <commit>
+
+    -e, --edit            edit commit message
+    -v, --verbose         be verbose
+    -h, -?, --help        show this help
 
 This replaces a linear sequence of merges from <commit> to HEAD,
 with a single merge of <commit> and HEAD's second parent.
@@ -43,12 +54,32 @@ Starting from:            `git combine-merges B` produces:
 A---B---C---@             and a warning about E
 
 EOF
+	exit $retcode;
+}
+
+my $edit = undef;
+my $verbose = 0;
+my $help;
+
+Getopt::Long::Configure("no_auto_abbrev", "bundling");
+GetOptions (
+	"edit|e"     => \$edit,
+	"help|h|?"     => \$help,
+	"verbose|v+"  => \$verbose,
+) or usage();
+
+usage(\*STDOUT, 0) if $help;
+
+usage() unless scalar @ARGV;
+if (scalar @ARGV > 1) {
+	print STDERR "Expected a single revision argument\n\n";
+	usage();
 }
 
 my $input_ref = $ARGV[0] // usage();
 
 my $rev;
-my $status_rev_parse = Proc::Hevy->exec(
+my $status_rev_parse = exec_wrapper(
 	command => [qw(git rev-parse --verify), "$input_ref^{commit}"],
 	stdout  => \$rev,
 	stderr  => \*STDERR,
@@ -56,7 +87,7 @@ my $status_rev_parse = Proc::Hevy->exec(
 exit($status_rev_parse << 8) if $status_rev_parse;
 chomp $rev;
 
-my $status_rev_ancestor = Proc::Hevy->exec(
+my $status_rev_ancestor = exec_wrapper(
 	command => [qw(git merge-base --is-ancestor), $rev, '@^'],
 	stderr  => \*STDERR,
 );
@@ -65,7 +96,7 @@ if ($status_rev_ancestor) {
 }
 
 my $log_str;
-my $status_rev_log = Proc::Hevy->exec(
+my $status_rev_log = exec_wrapper(
 	command => [qw(git log --ancestry-path --pretty=tformat:%H%x00%P%x00%B%x00%x00%x00 -z), "$rev..@"],
 	stdout  => \$log_str,
 	stderr  => \*STDERR,
@@ -106,7 +137,7 @@ for (keys %seen_parents) {
 	next if exists $revs_hash{$_};
 	next if $_ eq $rev;
 
-	my $status = Proc::Hevy->exec(
+	my $status = exec_wrapper(
 		command => [qw(git merge-base --is-ancestor), $_, $head_rev->{parents}->[1]],
 		stderr  => \*STDERR,
 	);
@@ -146,8 +177,15 @@ if (scalar %conflict_lines) {
 }
 my $new_msg_str = join("\n", @new_msg);
 
+if ($edit) {
+	my ($fh, $filename) = tempfile('git-combine-merges-edit-message-XXXXXXXX', UNLINK => 1);
+	print $fh $new_msg_str;
+	system('git', 'editor', $filename) == 0 or fatal("Could not edit commit message");
+	$new_msg_str = read_file($filename);
+}
+
 my $new_rev;
-my $status_commit = Proc::Hevy->exec(
+my $status_commit = exec_wrapper(
 	command => [qw(git commit-tree -p), $rev, qw(-p @^2 -m), $new_msg_str, '@^{tree}'],
 	stdout  => \$new_rev,
 	stderr  => \*STDERR,
@@ -155,13 +193,31 @@ my $status_commit = Proc::Hevy->exec(
 exit($status_commit << 8) if $status_commit;
 chomp $new_rev;
 
-my $status_reset = Proc::Hevy->exec(
+my $status_reset = exec_wrapper(
 	command => [qw(git reset --soft), $new_rev],
 	stderr  => \*STDERR,
 );
 exit($status_reset << 8) if $status_reset;
 
 exit 0;
+
+sub exec_wrapper {
+	my %opts = @_;
+	if ($verbose >= 1) {
+		my $command;
+		eval {
+			require String::ShellQuote;
+			$command = String::ShellQuote::shell_quote(@{ $opts{command} });
+		};
+		$command = join(" ", @{ $opts{command} }) unless defined $command;
+		print STDERR "Executing: $command\n";
+	}
+	my $status = Proc::Hevy->exec(%opts);
+	if ($verbose >= 2 && defined $opts{stdout} && ref $opts{stdout} eq "SCALAR") {
+		print STDERR "STDOUT: '" . ${ $opts{stdout} } . "'\n";
+	}
+	return $status;
+}
 
 sub log_rev_line {
 	my ($rev) = @_;
