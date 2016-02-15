@@ -26,6 +26,7 @@ sub usage {
 usage: git combine-merges [options] <commit>
 
     -e, --edit            edit commit message
+    -b, --branch <branch> replace all uses of HEAD with <branch>
     -f, --force           perform fewer checks, see -s/--second-parent
     -n, --dry-run         print the new commit hash instead of resetting HEAD
     -v, --verbose         be verbose
@@ -63,13 +64,13 @@ EOF
 	exit $retcode;
 }
 
-my ($edit, $force, $help, $dry_run);
+my ($edit, $force, $help, $dry_run, $second_parent, $branch);
 my $verbose = 0;
-my $second_parent;
 
 Getopt::Long::Configure("no_auto_abbrev", "bundling");
 GetOptions (
 	"edit|e"       => \$edit,
+	"branch|b=s"   => \$branch,
 	"force|f"      => \$force,
 	"dry-run|n"    => \$dry_run,
 	"help|h|?"     => \$help,
@@ -85,6 +86,27 @@ if (scalar @ARGV > 1) {
 	usage();
 }
 
+my ($branch_commit, $branch_name, $branch_ref, $status_branch);
+if (defined $branch) {
+	$branch_name = $branch;
+	$branch_ref = "refs/heads/$branch";
+	$status_branch = exec_wrapper(
+		command => [qw(git show-ref --hash --verify), $branch_ref],
+		stdout  => \$branch_commit,
+		stderr  => \*STDERR,
+	);
+} else {
+	$branch_name = "HEAD";
+	$branch_ref = "HEAD";
+	$status_branch = exec_wrapper(
+		command => [qw(git rev-parse --verify @)],
+		stdout  => \$branch_commit,
+		stderr  => \*STDERR,
+	);
+}
+exit($status_branch << 8) if $status_branch;
+chomp $branch_commit;
+
 my $input_ref = $ARGV[0] // usage();
 
 my $rev;
@@ -97,16 +119,16 @@ exit($status_rev_parse << 8) if $status_rev_parse;
 chomp $rev;
 
 my $status_rev_ancestor = exec_wrapper(
-	command => [qw(git merge-base --is-ancestor), $rev, '@^'],
+	command => [qw(git merge-base --is-ancestor), $rev, "$branch_commit^"],
 	stderr  => \*STDERR,
 );
 if ($status_rev_ancestor) {
-	fatal_rev("'$input_ref' is not an ancestor of HEAD's first parent", $rev);
+	fatal_rev("'$input_ref' is not an ancestor of ${branch_name}'s first parent", $rev);
 }
 
 my $log_str;
 my $status_rev_log = exec_wrapper(
-	command => [qw(git log --ancestry-path --pretty=tformat:%H%x00%P%x00%B%x00%x00%x00 -z), "$rev..@"],
+	command => [qw(git log --ancestry-path --pretty=tformat:%H%x00%P%x00%B%x00%x00%x00 -z), "$rev..$branch_commit"],
 	stdout  => \$log_str,
 	stderr  => \*STDERR,
 );
@@ -134,7 +156,7 @@ if (scalar @revs == 0) {
 my ($head_rev, @non_head_revs) = @revs;
 
 if (scalar @{ $head_rev->{parents} } != 2) {
-	fatal("HEAD is not a merge with exactly 2 parents");
+	fatal_rev("$branch_name is not a merge with exactly 2 parents", $head_rev->{hash});
 }
 for (@non_head_revs) {
 	if (scalar @{ $_->{parents} } < 2) {
@@ -145,7 +167,7 @@ for (@non_head_revs) {
 if (defined $second_parent) {
 	my ($head_p2_tree, $sp_tree);
 	my $status_head = exec_wrapper(
-		command => [qw(git log --pretty=format:%T @^2^!)],
+		command => [qw(git log --pretty=format:%T), "$branch_commit^2^!"],
 		stdout  => \$head_p2_tree,
 		stderr  => \*STDERR,
 	);
@@ -158,10 +180,10 @@ if (defined $second_parent) {
 	exit($status_sp << 8) if $status_sp;
 	if ($head_p2_tree ne $sp_tree) {
 		print STDERR $force ? "Warning: " : "Fatal :";
-		print STDERR "Specified second parent does not match HEAD^2\n\t";
+		print STDERR "Specified second parent does not match $branch_name^2\n\t";
 		log_rev_line($second_parent);
 		print STDERR "\t";
-		log_rev_line('@^2');
+		log_rev_line("$branch_commit^2");
 		exit 1 unless $force;
 	}
 }
@@ -175,7 +197,7 @@ for (keys %seen_parents) {
 		stderr  => \*STDERR,
 	);
 	if ($status) {
-		print STDERR "Warning: commit referenced by the current HEAD will not be referenced by the new HEAD\n\t";
+		print STDERR "Warning: commit referenced by the current $branch_name will not be referenced by the new $branch_name\n\t";
 		log_rev_line($_);
 	}
 }
@@ -219,7 +241,7 @@ if ($edit) {
 
 my $new_rev;
 my $status_commit = exec_wrapper(
-	command => [qw(git commit-tree -p), $rev, '-p', $second_parent // '@^2', '-m', $new_msg_str, '@^{tree}'],
+	command => [qw(git commit-tree -p), $rev, '-p', $second_parent // "$branch_commit^2", '-m', $new_msg_str, "$branch_commit^{tree}"],
 	stdout  => \$new_rev,
 	stderr  => \*STDERR,
 );
@@ -227,12 +249,12 @@ exit($status_commit << 8) if $status_commit;
 chomp $new_rev;
 
 if ($dry_run) {
-	print "\nNot resetting HEAD.\n\nNew commit: '$new_rev'\n";
+	print "\nNot resetting $branch_name.\n\nNew commit: '$new_rev'\n";
 	exit 0;
 }
 
 my $status_reset = exec_wrapper(
-	command => [qw(git reset --soft), $new_rev],
+	command => [qw(git update-ref -m), "git-combine-merges: resetting $branch_name to $new_rev", $branch_ref, $new_rev, $branch_commit],
 	stderr  => \*STDERR,
 );
 exit($status_reset << 8) if $status_reset;
