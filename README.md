@@ -57,8 +57,18 @@ A---D---G                 A---D---G
 ----C---F---@             ----C-------@'
 ```
 
+### Dependencies:
+* Perl 5:  
+  * Proc::Hevy  
+  * Getopt::Long  
+  * File::Temp  
+  * File::Slurp
+
+### Shell completion:
+A bash completion script is also included.
+
 ### URLs:
-* This project is hosted at https://github.com/JGRennison/git-combine-merges
+This project is hosted at https://github.com/JGRennison/git-combine-merges
 
 ### License:
 New BSD License, see LICENSE.txt
