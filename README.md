@@ -1,0 +1,64 @@
+## git-combine-merges
+**Combines a linear sequences of merges into a single merge**  
+
+### Usage:
+
+    git combine-merges [options] commit
+
+This replaces a linear sequence of merges from *commit* to HEAD,
+with a single merge of *commit* and HEAD's second parent.  
+*commit* must be an ancestor of HEAD's first parent.  
+HEAD must be a merge with two parents.  
+The merges replaced are those given by `git log --ancestry-path <commit>..HEAD`.  
+The new merge has the same tree as HEAD.  
+The new merge's commit message is HEAD's, plus any conflict
+messages from the replaced merges.  
+This does not touch the index or working tree.  
+A warning is output if a replaced merge has a parent not reachable
+from the new merge.
+
+### Options:
+* -e, --edit  
+  edit commit message
+* -b, --branch *branch*  
+  replace all uses of HEAD with *branch*
+* -s, --second-parent *commit2*  
+  use *commit2* as the new merge's second parent, it must have the  
+  same tree as HEAD's current second parent, unless -f/--force is used
+* -f, --force  
+  perform fewer checks, see -s/--second-parent
+* -n, --dry-run  
+  print the new commit hash instead of resetting HEAD
+* -v, --verbose  
+  be verbose
+* -h, -?, --help  
+  show help
+
+### Examples:
+```
+Starting from:            `git combine-merges B` produces:
+  D---E---F                 D---E---F
+ /     \   \     --->      /         \
+A---B---C---@             A---B-------@'
+
+Starting from:            `git combine-merges B` produces:
+    F----
+   /     \                  D---F
+  D---E   \      --->      /     \
+ /     \   \              A---B---@'
+A---B---C---@             and a warning about E
+
+Starting from:            `git combine-merges --branch H B` then:
+                          `git combine-merges --second-parent H' C` produces:
+A---D---G                 A---D---G
+     \   \                         \
+--B---E---H      --->     --B-------H'
+       \   \                         \
+----C---F---@             ----C-------@'
+```
+
+### URLs:
+* This project is hosted at https://github.com/JGRennison/git-combine-merges
+
+### License:
+New BSD License, see LICENSE.txt
