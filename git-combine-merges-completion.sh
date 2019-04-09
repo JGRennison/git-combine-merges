@@ -16,6 +16,10 @@ _git_combine_merges ()
 		__gitcomp_nl "$(__git_heads)" "" "${cur}"
 		return
 		;;
+	-s|--second-parent|--octopus-parent)
+		__gitcomp_nl "$(__git_refs)" "" "${cur}"
+		return
+		;;
 	esac
 	case "$cur" in
 	--branch=*)
@@ -26,8 +30,12 @@ _git_combine_merges ()
 		__gitcomp_nl "$(__git_refs)" "" "${cur#*=}"
 		return
 		;;
+	--octopus-parent=*)
+		__gitcomp_nl "$(__git_refs)" "" "${cur#*=}"
+		return
+		;;
 	--*)
-		__gitcomp "--edit --branch --second-parent --force --dry-run --help --verbose"
+		__gitcomp "--edit --branch --second-parent --octopus-parent --force --dry-run --help --verbose"
 		;;
 	*)
 		__gitcomp_nl "$(__git_refs)"

@@ -36,6 +36,10 @@ usage: git combine-merges [options] <commit>
         use <commit2> as the new merge's second parent, it must have the
         same tree as HEAD's current second parent, unless -f/--force is used
 
+    -o, --octopus-parent <commitN>
+        use commitN as the new merge's Nth parent (starting from third),
+        this option may be used more than once, the commit is not checked
+
 This replaces a linear sequence of merges from <commit> to HEAD,
 with a single merge of <commit> and HEAD's second parent (or -s <commmit2>).
 <commit> must be an ancestor of HEAD's first parent.
@@ -64,7 +68,7 @@ EOF
 	exit $retcode;
 }
 
-my ($edit, $force, $help, $dry_run, $second_parent, $branch);
+my ($edit, $force, $help, $dry_run, $second_parent, $branch, @octopus_parent);
 my $verbose = 0;
 
 Getopt::Long::Configure("no_auto_abbrev", "bundling");
@@ -76,6 +80,7 @@ GetOptions (
 	"help|h|?"     => \$help,
 	"verbose|v+"   => \$verbose,
 	"second-parent|s=s"  => \$second_parent,
+	"octopus-parent|o=s"  => \@octopus_parent,
 ) or usage();
 
 usage(\*STDOUT, 0) if $help;
@@ -240,8 +245,10 @@ if ($edit) {
 }
 
 my $new_rev;
+my @extra;
+push @extra, ('-p', $_) for @octopus_parent;
 my $status_commit = exec_wrapper(
-	command => [qw(git commit-tree -p), $rev, '-p', $second_parent // "$branch_commit^2", '-m', $new_msg_str, "$branch_commit^{tree}"],
+	command => [qw(git commit-tree -p), $rev, '-p', $second_parent // "$branch_commit^2", @extra, '-m', $new_msg_str, "$branch_commit^{tree}"],
 	stdout  => \$new_rev,
 	stderr  => \*STDERR,
 );
