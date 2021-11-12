@@ -25,6 +25,9 @@ from the new merge.
 * -s, --second-parent *commit2*  
   use *commit2* as the new merge's second parent, it must have the  
   same tree as HEAD's current second parent, unless -f/--force is used
+* -o, --octopus-parent *commitN*  
+  use commitN as the new merge's Nth parent (starting from third),  
+  this option may be used more than once, the commit is not checked
 * -f, --force  
   perform fewer checks, see -s/--second-parent
 * -n, --dry-run  
