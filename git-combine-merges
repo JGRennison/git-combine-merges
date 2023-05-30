@@ -40,6 +40,10 @@ usage: git combine-merges [options] <commit>
         use commitN as the new merge's Nth parent (starting from third),
         this option may be used more than once, the commit is not checked
 
+    -m, --message-commit <commitM>
+        set the new merge's commit message to commitM's message,
+        the message is not modified to add conflict lines.
+
 This replaces a linear sequence of merges from <commit> to HEAD,
 with a single merge of <commit> and HEAD's second parent (or -s <commmit2>).
 <commit> must be an ancestor of HEAD's first parent.
@@ -47,7 +51,7 @@ HEAD must be a merge with two parents.
 The merges replaced are those given by `git log --ancestry-path <commit>..HEAD`
 The new merge has the same tree as HEAD.
 The new merge's commit message is HEAD's, plus any conflict
-messages from the replaced merges.
+messages from the replaced merges (unless -m/--message-commit is used).
 This does not touch the index or working tree.
 A warning is output if a replaced merge has a parent not reachable
 from the new merge.
@@ -68,7 +72,7 @@ EOF
 	exit $retcode;
 }
 
-my ($edit, $force, $help, $dry_run, $second_parent, $branch, @octopus_parent);
+my ($edit, $force, $help, $dry_run, $second_parent, $branch, @octopus_parent, $message_commit);
 my $verbose = 0;
 
 Getopt::Long::Configure("no_auto_abbrev", "bundling");
@@ -81,6 +85,7 @@ GetOptions (
 	"verbose|v+"   => \$verbose,
 	"second-parent|s=s"  => \$second_parent,
 	"octopus-parent|o=s"  => \@octopus_parent,
+	"message-commit|m=s"  => \$message_commit,
 ) or usage();
 
 usage(\*STDOUT, 0) if $help;
@@ -230,12 +235,22 @@ for (@revs) {
 	$_->{saved_msg_lines} = \@saved_lines;
 }
 
-# generate new message, with deduped conflict lines from all combined merges
-my @new_msg = @{ $head_rev->{saved_msg_lines} };
-if (scalar %conflict_lines) {
-	push @new_msg, "", "# Conflicts:", sort(keys %conflict_lines), "";
+my $new_msg_str;
+if (defined $message_commit) {
+	my $status_mc = exec_wrapper(
+		command => [qw(git log --pretty=tformat:%B), "$message_commit^!"],
+		stdout  => \$new_msg_str,
+		stderr  => \*STDERR,
+	);
+	exit($status_mc << 8) if $status_mc;
+} else {
+	# generate new message, with deduped conflict lines from all combined merges
+	my @new_msg = @{ $head_rev->{saved_msg_lines} };
+	if (scalar %conflict_lines) {
+		push @new_msg, "", "# Conflicts:", sort(keys %conflict_lines), "";
+	}
+	$new_msg_str = join("\n", @new_msg);
 }
-my $new_msg_str = join("\n", @new_msg);
 
 if ($edit) {
 	my ($fh, $filename) = tempfile('git-combine-merges-edit-message-XXXXXXXX', UNLINK => 1);

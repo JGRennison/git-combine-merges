@@ -12,7 +12,7 @@ HEAD must be a merge with two parents.
 The merges replaced are those given by `git log --ancestry-path <commit>..HEAD`.  
 The new merge has the same tree as HEAD.  
 The new merge's commit message is HEAD's, plus any conflict
-messages from the replaced merges.  
+messages from the replaced merges (unless -m/--message-commit is used).  
 This does not touch the index or working tree.  
 A warning is output if a replaced merge has a parent not reachable
 from the new merge.
@@ -28,6 +28,9 @@ from the new merge.
 * -o, --octopus-parent *commitN*  
   use commitN as the new merge's Nth parent (starting from third),  
   this option may be used more than once, the commit is not checked
+* -m, --message-commit *commitM*  
+  set the new merge's commit message to commitM's message,  
+  the message is not modified to add conflict lines.
 * -f, --force  
   perform fewer checks, see -s/--second-parent
 * -n, --dry-run  
